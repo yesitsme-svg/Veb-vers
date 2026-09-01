@@ -1943,7 +1943,9 @@ const SCENES = {
     const maxD=VIS*stg, WAVE=P.wave||1.6;
     const exitDrop=fr.h*0.95, exitDur=P.dur*0.78;  // the front card is the biggest thing on screen, so its fall is spread out —
                                                    // a short drop spikes the whole beat's motion into one lump and leaves a dead tail
-    return { loopSeconds:cyc*n,
+    // n is padded to a MULTIPLE of the source count to fill the stack, but the picture therefore repeats
+    // every N0 beats, not every n — looping on n would export the same footage two or three times over.
+    return { loopSeconds:cyc*Math.max(1,N0),
       update(T){
         const sp=state.spacing||1;                 // LIVE: spacing deepens the recession — no rebuild
         // z(s)=DZ·s·(1+s): the depth step GROWS with each slot, so the near cards stay big and readable
@@ -1956,7 +1958,9 @@ const SCENES = {
         for(let i=0;i<n;i++){
           const m=meshes[i];
           const b=(((i-c)%n)+n)%n;                 // this card's slot at the START of the beat
-          if(b>GONE){ m.visible=false; continue; } // parked far behind the visible range
+          // +1 slot of slack: a card one place beyond the runway still travels INTO the fade during the
+          // beat, so culling it at exactly GONE drops a card that should be faintly on screen.
+          if(b>GONE+1){ m.visible=false; continue; }
           const delay=b>=VIS?0:maxD*Math.pow((VIS-b)/VIS,WAVE);  // back card moves FIRST, the front one LAST
           if(b===0){                               // the front card — shoved down and out of frame
             const q=clamp01((m0-delay)/exitDur), qe=q*q*(3-2*q);
@@ -1974,6 +1978,72 @@ const SCENES = {
           m.visible=op>0.004;
           setCardOpacity(m,op);
           m.renderOrder=100-s;                     // CONTINUOUS (depthTest is off, so this is the painter's order)
+        }
+      } };
+  },
+
+  /* Push Cascade — the Push Stack impulse turned on its side. A shingled row of cards steps down and
+     to the right along the frame's own diagonal; every beat the impulse starts at the far top-left
+     card and travels LEFT → RIGHT, each card shoving the next, until the leading card is pushed out
+     past the bottom-right corner. Flat (no perspective) — the row is read by overlap, not by depth.
+     Cards enter and recycle off-frame, so the loop needs no fade to hide the seam. */
+  pushCascade(P){
+    const N0=sourceList().length;
+    camera.position.set(0,0,5); camera.lookAt(0,0,0);
+    const fr=frameAt(5);
+    const diag=Math.hypot(fr.w,fr.h);
+    const STEP=P.step||0.13;      // one slot = 13% of EACH frame axis → the row runs corner to corner in any format
+    // Bake enough cards to fill the frame at the spacing FLOOR (the densest the slider reaches); the
+    // pitch itself is live in update(), so dragging Spacing never rebuilds.
+    let n=Math.max(N0, Math.ceil(1/(STEP*SP_FLOOR))+4);
+    while(n%N0) n++;              // even image distribution — no duplicate neighbours at the loop seam
+    const CH=P.card*diag;         // characteristic card size (a square card's side)
+    const meshes=[];
+    for(let i=0;i<n;i++){
+      const e=entryForSlot(i);
+      // constant AREA rather than constant height — a 16:9 and a 4:5 card then read as equally large
+      // in the row, so a mixed upload still shingles evenly instead of stepping in and out.
+      const h=CH/Math.sqrt(e.asp), w=h*e.asp;
+      const m=plane(e.tex,w,h,true); m.userData={slot:i}; m.visible=false;
+      root.add(m); meshes.push(m);
+    }
+    const cyc=P.dur+P.hold, lead=P.lead==null?0.62:P.lead, WAVE=P.wave||1.6;
+    const exitSlots=P.exitSlots||2.4, exitDur=P.dur*0.78;
+    // as in Push Stack: n is padded to fill the row, but the picture repeats every N0 beats
+    return { loopSeconds:cyc*Math.max(1,N0),
+      update(T){
+        const sp=state.spacing||1;
+        const dx=fr.w*STEP*sp, dy=fr.h*STEP*sp;
+        const across=Math.min(14,Math.max(2,1/(STEP*sp)));  // slots that fit on screen at this spacing
+        // Centring the row would drop the leading card's CENTRE exactly on the frame corner, leaving only
+        // a quarter of it in shot. Biasing the whole row back up-left by ~0.7 of a slot keeps it readable.
+        const mid=across/2-(P.bias==null?0.7:P.bias);
+        // Flat at rest. Under manual tilt, lift the row into a shallow staircase: parallel offset planes
+        // cannot intersect, so the draw order stays put instead of flickering (same trick as Cascade).
+        const tiltR=Math.min(1,(Math.abs(state.rotX)+Math.abs(state.rotY))/12), stepZ=CH*0.07;
+        const c=Math.floor(T/cyc), m0=T-c*cyc;
+        const bob=Math.sin(Math.PI*clamp01(m0/cyc))*CH*0.014; // the row never dead-stops between shoves
+        for(let i=0;i<n;i++){
+          const m=meshes[i];
+          const b=(((i-c)%n)+n)%n;                 // this card's slot at the START of the beat
+          if(b>across+3.5){ m.visible=false; continue; }     // parked off-frame up-left (+1 slot of travel slack)
+          // Same power-spaced wave as Push Stack: the impulse leaves the far card first and reaches the
+          // leading one `lead` seconds later, with the gaps opening up toward the front.
+          const delay=b>=across?0:lead*Math.pow((across-b)/across,WAVE);
+          let s, op=1;
+          if(b===0){                               // the leading card — shoved out past the corner
+            const q=clamp01((m0-delay)/exitDur), qe=q*q*(3-2*q);
+            s=-qe*exitSlots;                       // keeps travelling along the diagonal, well clear of the frame
+            op=1-THREE.MathUtils.smoothstep(qe,0.72,1);
+            m.renderOrder=1000;                    // leading card → always on top
+          }else{
+            // NOT clamped: an overshooting curve (Snappy) lets a card slide a hair past its slot and settle
+            s=b-state.easeFn(clamp01((m0-delay)/P.dur));
+            m.renderOrder=-s;                      // CONTINUOUS — lower slot draws over higher (down-right on top)
+          }
+          m.position.set((mid-s)*dx, (s-mid)*dy+bob, -s*stepZ*tiltR);
+          m.visible=op>0.004;
+          setCardOpacity(m,op);
         }
       } };
   },
@@ -1995,6 +2065,7 @@ const TEMPLATES = [
   {id:'floating',     name:'Floating',        scene:'floating',     ease:'Linear',   noEase:true, lockEase:true, P:{loop:9,   corner:1.5}},
   {id:'showcase',     name:'Showcase',      scene:'showcase',     ease:'Smooth',   noSpace:true, P:{dur:.65,   hold:.8, corner:1.5}},
   {id:'push-stack',   name:'Push Stack',            scene:'pushStack',    ease:'Smooth',   eases:['Smooth','Ease Out','Snappy'], spacing:.8, P:{dur:.88, hold:.77, corner:0, minN:7, vis:5, stagger:.13, wave:1.6}},
+  {id:'push-cascade', name:'Push Cascade',          scene:'pushCascade',  ease:'Smooth',   eases:['Smooth','Ease Out','Snappy'], spacing:1, P:{dur:.88, hold:.77, corner:0, card:.19, step:.13, lead:.62, wave:1.6, exitSlots:2.4, bias:.7}},
   {cat:'Grids & Scrolls'},
   {id:'scroll-cols',  name:'Columns',        scene:'scrollCols',   ease:'Linear',   noEase:true, lockEase:true, P:{corner:2, cols:3, cellAsp:0.74}},
   {id:'marquee-rows', name:'Rows',          scene:'scrollRows',   ease:'Linear',   noEase:true, lockEase:true, P:{corner:2, rows:3, cellAsp:0.7}},
@@ -2022,7 +2093,7 @@ const state={
 };
 let active=null, animTime=0, builtSpacing=1;
 // presets that read spacing LIVE in their own update() (count baked, pitch/radius live) → smooth, no rebuild
-const LIVE_SPACE=new Set(['scrollCols','scrollRows','gridDrift','spiral','stackReveal','shuffleCards','filmstrip','vScroll','gridPop','marquee','field','globe','pushStack']);
+const LIVE_SPACE=new Set(['scrollCols','scrollRows','gridDrift','spiral','stackReveal','shuffleCards','filmstrip','vScroll','gridPop','marquee','field','globe','pushStack','pushCascade']);
 // fixed-count presets where spacing == a uniform position scale from centre → done live in renderFrame
 // (cards keep their size; at low spacing they cluster/overlap = mush, at high they spread). No rebuild.
 const SCALE_SPACE=new Set(['ring','floating','wreath','stackFeed','diagCascade']);
@@ -2194,7 +2265,7 @@ function sceneHasBacks(){
   try{ active.update(animTime); }catch(e){}
   return away;
 }
-const FLAT_ROT_FADE=new Set(['diagCascade','wreath','scrollCols','scrollRows','gridDrift','filmstrip','vScroll','gridPop','marquee']); // flat at rest, real depth once tilted
+const FLAT_ROT_FADE=new Set(['diagCascade','wreath','scrollCols','scrollRows','gridDrift','filmstrip','vScroll','gridPop','marquee','pushCascade']); // flat at rest, real depth once tilted
 // scenes that use the ON-SCREEN FROZEN fade span (near visible card full-bright, melts to dark, no breathing as
 // cards recycle). = the flat-rot scenes PLUS Field Flight (a fly-through whose visible depth window is constant).
 const FROZEN_SPAN_FADE=new Set([...FLAT_ROT_FADE,'field','globe','stackReveal','stackFeed','pushStack']); // spiral drives its own p-based fade (see engine). Decks recycle cards front→back, so freeze the span → no opacity "pop" as a new card resurfaces.
