@@ -1600,59 +1600,43 @@ const SCENES = {
       } };
   },
 
-  /* Spinner — a vertical conveyor of TURNING cards. Cards step down the frame at a constant pitch while
-     their tilt grows steadily with depth: the one arriving at the top is nearly square-on, the next is
-     edge-on (a bare sliver), the one below that has rolled past vertical and shows its back upside down.
-     So every card on screen sits at its own angle — the fan reads at a glance.
-     Deliberately NOT a cylinder: on a ring y = R*sin(theta), so a card turned 180 degrees comes back to
-     the middle instead of carrying on downward, and the stack cannot keep turning as it descends. Here
-     position and angle advance independently, which is what the reference actually does.
-     Neighbours can't clash either: a card is only ever near full height when the ones touching it are
-     near edge-on, and cards at a similar angle are TURN_PERIOD slots apart — much further than one card. */
+  /* Spinner — cards mounted as RADIAL BLADES on a vertical circle, like vanes on a paddle wheel.
+     The blade angle is the whole point: each card is turned 90 degrees from the ring's tangent, so it
+     lies in the plane through the wheel's axis rather than wrapping around the rim. What you get is the
+     reference exactly — the card at the FRONT of the wheel is edge-on and reads as a thin sliver across
+     the middle of the frame, the card at the TOP faces you square-on, and the one at the BOTTOM faces
+     you upside down, having carried on past vertical. Every card sits at its own angle.
+     A tangent ring (the usual arrangement) puts the square-on card at the front, dead centre, with the
+     tilted ones above and below — a symmetric barrel, which is not this.
+     Blades share one axis line, so the only way they could touch is by reaching it: keeping the radius
+     above half a card height guarantees they never do, at any card count. */
   spinner(P){
-    const N=Math.max(1,sourceList().length);
+    const N=Math.max(1,sourceList().length), minN=P.minN||6;
+    const n=N>=minN?N:N*Math.ceil(minN/N);
     camera.position.set(0,0,5); camera.lookAt(0,0,0);
     const fr=frameAt(5);
-    const H=fr.h*(P.card||0.42);                 // face-on card height
-    // Pitch = half a card, so the square-on card's bottom edge meets the flipped card's top edge and the
-    // run reads as one continuous column, the way the reference does.
-    // Spacing spreads the run, floored at half a card: any tighter and a square-on card's edge would
-    // cut through the edge-on card beside it.
-    const pitch=H*Math.max(0.5,(P.pitch||0.5)*(state.spacing||1));
-    const quarter=P.quarter||4;                  // slots per full turn (4 => 90 degrees per card)
-    // Slot count must be a whole number of turns, or the tilt would jump when a card recycles.
-    const K=quarter*Math.max(2,Math.ceil((fr.h/pitch+3)/quarter));
-    const dRot=Math.PI*2/quarter, tilt0=THREE.MathUtils.degToRad(P.tilt||8);
-    const meshes=[], shown=[];
-    for(let i=0;i<K;i++){
-      const e=entryForSlot(i%N);
-      const m=plane(e.tex,H*PA,H); m.userData={slot:i%N};
-      shown.push(-1); root.add(m); meshes.push(m);
+    const H=fr.h*(P.card||0.30);                    // card height when it faces you
+    // Radius floored at 0.55 of the card so a blade's inner edge can never reach the axis
+    const R=Math.max(H*0.55, fr.h*(P.radius||0.24)*(state.spacing||1));
+    const inner=new THREE.Group(); root.add(inner);
+    const meshes=[], baseA=[];
+    for(let i=0;i<n;i++){
+      const e=entryForSlot(i);
+      const m=plane(e.tex,H*e.asp,H); m.userData={slot:i};
+      baseA.push(i/n*Math.PI*2);
+      inner.add(m); meshes.push(m);
     }
-    // Put slot 0 (the square-on card) right at the top edge, so the frame reads exactly like the
-    // reference: square-on at the top, edge-on under it, flipped below that. Centring the run instead
-    // would start the frame on an edge-on sliver and bury the readable card in the middle.
-    const cyc=P.dur+P.hold, top=fr.h*0.5-H*0.5;
+    const cyc=P.dur+P.hold, QUARTER=Math.PI/2;
+    // n is padded up to minN, but after N beats card i lands where card i+N was and both carry image
+    // i mod N — so the picture repeats every N beats, not every n.
     return { loopSeconds:cyc*N,
       update(T){
-        const u=T/cyc*state.dir;
-        for(let i=0;i<K;i++){
-          const m=meshes[i];
-          const k=(((i-u)%K)+K)%K;                // 0 = top of the run, K = about to recycle
-          // texture swaps at the recycle point, which is off-frame above
-          const pass=Math.floor((i-u)/K);
-          const idx=((((i-pass*K)%N)+N)%N);
-          if(shown[i]!==idx){
-            const e=entryForSlot(idx);
-            setCardTex(m,e.tex); m.scale.x=e.asp/PA;
-            m.material.uniforms.aspect.value=1/e.asp;
-            m.userData.slot=idx; shown[i]=idx;
-          }
-          m.position.set(0, top-k*pitch, 0);
-          // The small constant offset keeps a card from ever sitting at a dead 90 degrees, where it would
-          // vanish completely and leave a hole; instead it stays a thin sliver, as in the reference.
-          m.rotation.x=-(k*dRot+tilt0);           // tilt grows steadily with depth
-          m.renderOrder=-k;                       // upper card draws over the one below it
+        const spin=(T/cyc)*(Math.PI*2/n)*state.dir;
+        for(let i=0;i<n;i++){
+          const th=baseA[i]+spin, m=meshes[i];
+          m.position.set(0, Math.sin(th)*R, Math.cos(th)*R);
+          m.rotation.x=-th+QUARTER;                 // +90 deg off tangent — this is what makes it a blade
+          m.renderOrder=m.position.z;               // nearer blade draws later (depthTest is off)
         }
       } };
   },
@@ -2135,7 +2119,7 @@ const TEMPLATES = [
   {id:'field',        name:'Field Flight',          scene:'field',        ease:'Linear',   noEase:true, lockEase:true, spacing:0.85, fade:60, P:{dur:0.95,  hold:.2,  drift:.35, corner:0, minN:18}},
   {id:'spiral',       name:'Spiral Vortex',         scene:'spiral',       ease:'Linear',   noEase:true, lockEase:true, size:1.23, spacing:1.55, fade:100, P:{corner:1.5, turns:1.5, drift:1, minN:15, loop:23}},
   {id:'globe',        name:'Globe',                 scene:'globe',        ease:'Linear',   noEase:true, lockEase:true, fade:40, P:{dur:14, hold:0, drift:1, corner:1, minN:24}},
-  {id:'spinner',      name:'Spinner',               scene:'spinner',      ease:'Linear',   noEase:true, lockEase:true, comp:.68, P:{dur:1.5, hold:0, corner:2.5, card:.42, pitch:.5, quarter:4, tilt:8}},
+  {id:'spinner',      name:'Spinner',               scene:'spinner',      ease:'Linear',   noEase:true, lockEase:true, comp:.68, P:{dur:1.5, hold:0, corner:2.5, card:.46, radius:.275, minN:6}},
   {cat:'Cuts'},
   {id:'zoom-gallery', name:'Zoom Gallery',          scene:'zoomGallery',  ease:'Smooth',   noRot:true, noSpace:true, eases:['Smooth','Ease Out'], P:{dur:.7,   hold:.3, corner:0}},
   {id:'flicker',      name:'Flicker',               scene:'flicker',      ease:'Ease Out', noRot:true, noSpace:true, eases:['Ease Out','Smooth'], P:{dur:.34,  hold:.12, corner:0}},
