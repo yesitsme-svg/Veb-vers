@@ -1600,6 +1600,49 @@ const SCENES = {
       } };
   },
 
+  /* Spinner — a vertical barrel (Rolodex). Cards ride a ring turning about the HORIZONTAL axis: they
+     roll down through the front, face the camera square-on at the middle, and foreshorten away toward
+     the top and bottom, showing their backs as they wrap around. Continuous, constant speed.
+     The one thing that is not a plain ring: the radius is CAPPED. The Ring family sizes its radius so
+     cards never touch, which means the barrel balloons as you add images until it reads as a flat
+     vertical strip. Here, past the cap the extra cards simply shingle around the drum instead, so the
+     perspective reads the same with 6 images or 30. */
+  spinner(P){
+    const N0=sourceList().length, minN=P.minN||6;
+    const n=N0>=minN?N0:N0*Math.ceil(minN/N0);
+    const H=1.5;                                   // world card height; the camera distance below frames it
+    // No-overlap radius for n cards, but capped. The cap is doing two jobs: it preserves the 3D read at
+    // any image count, and because it binds for every n>=minN the barrel projects to the SAME height on
+    // screen whether you load 6 images or 30 — the framing never shifts under you as you add pictures.
+    const rf=Math.min(P.maxR||1.55, (P.chord||1)/(2*Math.sin(Math.PI/n)));
+    const R=H*rf*(state.spacing||1);
+    // Distance that makes a face-on card fill `fill` of the frame height. Because the camera sits at
+    // R+D, growing the barrel (Spacing) never changes how big the front card reads — it just widens
+    // the drum, exactly like the Vertical Wheel's spacing.
+    const D=H/(2*(P.fill||0.46)*Math.tan(THREE.MathUtils.degToRad(camera.fov/2)));
+    camera.position.set(0,0,R+D); camera.lookAt(0,0,0);
+    const inner=new THREE.Group(); root.add(inner);
+    const meshes=[], baseA=[];
+    for(let i=0;i<n;i++){
+      const e=entryForSlot(i);
+      const m=plane(e.tex,H*e.asp,H); m.userData={slot:i};
+      baseA.push(i/n*Math.PI*2);
+      inner.add(m); meshes.push(m);
+    }
+    const cyc=P.dur+P.hold;
+    // n is padded up to minN, but the barrel shows the same picture again after N0 beats (card j lands
+    // where card j+N0 was, and both carry image j mod N0) — looping on n would export it several times over.
+    return { loopSeconds:cyc*Math.max(1,N0),
+      update(T){
+        const rot=-(T/cyc)*(Math.PI*2/n)*state.dir;   // negative → cards roll DOWNWARD across the front
+        for(let i=0;i<n;i++){
+          const th=baseA[i]+rot, m=meshes[i];
+          m.position.set(0, Math.sin(th)*R, Math.cos(th)*R);
+          m.rotation.x=-th;                           // every card faces out of the barrel
+        }
+      } };
+  },
+
   /* Flicker — rapid full-frame cuts with a tiny scale punch */
   flicker(P){
     const N=sourceList().length;
@@ -2078,6 +2121,7 @@ const TEMPLATES = [
   {id:'field',        name:'Field Flight',          scene:'field',        ease:'Linear',   noEase:true, lockEase:true, spacing:0.85, fade:60, P:{dur:0.95,  hold:.2,  drift:.35, corner:0, minN:18}},
   {id:'spiral',       name:'Spiral Vortex',         scene:'spiral',       ease:'Linear',   noEase:true, lockEase:true, size:1.23, spacing:1.55, fade:100, P:{corner:1.5, turns:1.5, drift:1, minN:15, loop:23}},
   {id:'globe',        name:'Globe',                 scene:'globe',        ease:'Linear',   noEase:true, lockEase:true, fade:40, P:{dur:14, hold:0, drift:1, corner:1, minN:24}},
+  {id:'spinner',      name:'Spinner',               scene:'spinner',      ease:'Linear',   noEase:true, lockEase:true, P:{dur:1.5, hold:0, corner:2.5, minN:6, chord:1, maxR:.95, fill:.46}},
   {cat:'Cuts'},
   {id:'zoom-gallery', name:'Zoom Gallery',          scene:'zoomGallery',  ease:'Smooth',   noRot:true, noSpace:true, eases:['Smooth','Ease Out'], P:{dur:.7,   hold:.3, corner:0}},
   {id:'flicker',      name:'Flicker',               scene:'flicker',      ease:'Ease Out', noRot:true, noSpace:true, eases:['Ease Out','Smooth'], P:{dur:.34,  hold:.12, corner:0}},
@@ -2155,7 +2199,7 @@ function applyUserRot(){
   _quat.setFromEuler(_euler.set(THREE.MathUtils.degToRad(state.rotX),THREE.MathUtils.degToRad(state.rotY),0,'YXZ'));
   // Vertical wheel: tilt the COMPOSITION about its centre (camera fixed). Its cards form a vertical
   // ring, so a camera ORBIT would swing it edge-on; rotating the layout makes the column lean readably.
-  if(state.template.scene==='ring' && state.P && state.P.axis==='x'){
+  if((state.template.scene==='ring' && state.P && state.P.axis==='x') || state.template.scene==='spinner'){
     if(_camBaseSet){ MAIN_CAMERA.position.copy(_camBase); _origLookAt(T.x,T.y,T.z); MAIN_CAMERA.updateMatrixWorld(); }
     _mr.makeRotationFromQuaternion(_quat);
     _mt.makeTranslation(T.x,T.y,T.z); _mti.makeTranslation(-T.x,-T.y,-T.z);
@@ -2755,7 +2799,7 @@ function renderFrame(){
   // away-facing cards that a tilt reveals. (The vertical wheel uses layout-rotation in applyUserRot.)
   // ring/globe sort by camera distance. Diagonal Cascade does its OWN stable pw-based order in update()
   // (the shared euclidean sort mis-ordered its wide diagonal spread → that was the flicker/lag).
-  if(state.template.scene==='ring' || state.template.scene==='globe') sortCardsByDepth();
+  if(state.template.scene==='ring' || state.template.scene==='globe' || state.template.scene==='spinner') sortCardsByDepth();
   applyDepthFade();
   postMat.uniforms.uTime.value=animTime;
   const lens=state.lens||0;
