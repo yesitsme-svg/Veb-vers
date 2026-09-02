@@ -9,3 +9,8 @@
 
 # backups/ ХРАНИТСЯ в гите: снапшоты версий и CHANGELOG должны быть видны
 # на GitHub и переживать смену машины. На прод не едет (деплой = один index.html).
+
+# стенд проверки (tools/) — зависимости и результаты прогонов
+tools/node_modules/
+tools/out/
+tools/package-lock.json
